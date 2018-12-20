@@ -1,2 +1,4 @@
 biopython 
 lxml
+mpi4py
+pdbfixer

@@ -1,5 +1,23 @@
-import os, errno
+import os, errno, logging
 import functools 
+from .core import logger, mpistate
+
+
+def mpirank0only(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if mpistate.rank == 0:
+            fn(*args, **kwargs)
+    return wrapper
+
+
+def mpirank0only_and_end_with_barrier(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if mpistate.rank == 0:
+            fn(*args, **kwargs)
+        mpistate.comm.Barrier()
+    return wrapper
 
 def notify_when_done(fn): 
     @functools.wraps(fn)
@@ -10,7 +28,7 @@ def notify_when_done(fn):
 
 
 def log_done():
-    print('Done.')
+    logger.info('Done.')
 
     
 def create_dir(dirname): 
@@ -19,7 +37,7 @@ def create_dir(dirname):
     except OSError as exc:
         if exc.errno != errno.EEXIST:
             raise
-        print(f'File {dirname} exists, pass...') 
+        logger.info(f'File {dirname} exists, pass...') 
         
         
 def file_exists_and_not_empty(filepath):
@@ -27,3 +45,19 @@ def file_exists_and_not_empty(filepath):
         if os.path.getsize(filepath) > 0:
             return True
     return False
+
+def set_loglevel(loglevel):
+    """
+    Set minimum level for logging
+    >>> set_loglevel('info')   # log all messages except debugging messages. This is generally the default.
+    >>> set_loglevel('debug')   # log all messages, including debugging messages
+
+    Parameters
+    ----------
+    loglevel: str
+        {debug|info|warning|error|critical}
+    """
+    if loglevel is not None:
+        loglevel_obj = getattr(logging, loglevel.upper())
+        logger.setLevel(loglevel_obj)
+

@@ -1,4 +1,4 @@
-import os, sys, re, gzip 
+import os, sys, re, gzip
 from lxml import etree
 import Bio.SeqUtils
 import Bio.SeqIO
@@ -6,6 +6,7 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from . import utils, uniprot, core, pdb
 from .utils import notify_when_done, file_exists_and_not_empty
+from .core import logger, mpistate 
 
 
 structure_type_file_extension_mapper = {'pdb': '.pdb.gz', 'sifts': '.xml.gz'}
@@ -48,6 +49,7 @@ class GatherTargetsFromUniprot():
     Gather target protein data from Uniprot
     """
     def __init__(self, uniprot_query_string, uniprot_domain_regex=None, save_uniprot_xml=False, loglevel=None, run_main=True): 
+        utils.set_loglevel(loglevel)
         self.uniprot_query_string = uniprot_query_string
         self.uniprot_domain_regex = uniprot_domain_regex
         self._save_uniprot_xml = save_uniprot_xml
@@ -56,14 +58,14 @@ class GatherTargetsFromUniprot():
     
     @notify_when_done
     def _gather_targets(self, write_output_files = True): 
-        print('Querying Uniprot web server...')
+        logger.info('Querying Uniprot web server...')
         get_uniprot_xml_args = {}
         if self._save_uniprot_xml:
             get_uniprot_xml_args['write_to_filepath'] = 'targets-uniprot.xml'
 
         self.uniprotxml = uniprot.get_uniprot_xml(self.uniprot_query_string, **get_uniprot_xml_args)
         
-        print('Number of entries returned from initial UniProt search: %r\n' % len(self.uniprotxml)) 
+        logger.info('Number of entries returned from initial UniProt search: %r\n' % len(self.uniprotxml)) 
         
         log_unique_domain_names(self.uniprot_query_string, self.uniprotxml)
         if self.uniprot_domain_regex:
@@ -117,23 +119,25 @@ class GatherTargetsFromUniprot():
 def gather_templates_from_uniprot(uniprot_query_string, uniprot_domain_regex=None, structure_dirs=None, pdbids=None, chainids=None, loglevel=None):
     """# Searches UniProt for a set of template proteins with a user-defined
     query string, then saves IDs, sequences and structures."""
+    utils.set_loglevel(loglevel) 
     manual_overrides = core.ManualOverrides()
     selected_pdbchains = None
-    
-    uniprotxml = uniprot.get_uniprot_xml(uniprot_query_string)
-    log_unique_domain_names(uniprot_query_string, uniprotxml)
-    if uniprot_domain_regex is not None:
-        log_unique_domain_names_selected_by_regex(uniprot_domain_regex, uniprotxml)
+    if mpistate.rank == 0:
+        uniprotxml = uniprot.get_uniprot_xml(uniprot_query_string)
+        log_unique_domain_names(uniprot_query_string, uniprotxml)
+        if uniprot_domain_regex is not None:
+            log_unique_domain_names_selected_by_regex(uniprot_domain_regex, uniprotxml)
 
-    selected_pdbchains = extract_template_pdbchains_from_uniprot_xml(uniprotxml, uniprot_domain_regex=uniprot_domain_regex, manual_overrides=manual_overrides, specified_pdbids=pdbids, specified_chainids=chainids)
-    get_structure_files(selected_pdbchains, structure_dirs)
+        selected_pdbchains = extract_template_pdbchains_from_uniprot_xml(uniprotxml, uniprot_domain_regex=uniprot_domain_regex, manual_overrides=manual_overrides, specified_pdbids=pdbids, specified_chainids=chainids)
+        get_structure_files(selected_pdbchains, structure_dirs)
 
-    print('Selected PDB chains: {0}'.format([pdbchain['templateid'] for pdbchain in selected_pdbchains]))
+    selected_pdbchains = mpistate.comm.bcast(selected_pdbchains, root=0)
+    logger.debug('Selected PDB chains: {0}'.format([pdbchain['templateid'] for pdbchain in selected_pdbchains]))
 
     selected_templates = extract_template_pdb_chain_residues(selected_pdbchains)
     write_template_seqs_to_fasta_file(selected_templates)
     extract_template_structures_from_pdb_files(selected_templates)
-    write_gather_templates_from_uniprot_metadata(uniprot_query_string, uniprot_domain_regex, len(selected_templates), structure_dirs)
+    # write_gather_templates_from_uniprot_metadata(uniprot_query_string, uniprot_domain_regex, len(selected_templates), structure_dirs)
     
 
 def log_unique_domain_names(uniprot_query_string, uniprotxml):
@@ -148,13 +152,13 @@ def log_unique_domain_names(uniprot_query_string, uniprotxml):
             }
         )
         uniprot_unique_domain_names = set([domain.get('description') for domain in uniprot_query_string_domains])
-        print('Set of unique domain names selected by the domain selector \'%s\' during the initial UniProt search:\n%s\n'
+        logger.info('Set of unique domain names selected by the domain selector \'%s\' during the initial UniProt search:\n%s\n'
                     % (query_string_domain_selection, uniprot_unique_domain_names))
 
     else:
         uniprot_domains = uniprotxml.xpath('entry/feature[@type="domain"]')
         uniprot_unique_domain_names = set([domain.get('description') for domain in uniprot_domains])
-        print('Set of unique domain names returned from the initial UniProt search using the query string \'%s\':\n%s\n'
+        logger.info('Set of unique domain names returned from the initial UniProt search using the query string \'%s\':\n%s\n'
                     % (uniprot_query_string, uniprot_unique_domain_names))
 
 
@@ -164,7 +168,7 @@ def log_unique_domain_names_selected_by_regex(uniprot_domain_regex, uniprotxml):
         extensions={(None, 'match_regex'): ensembler.core.xpath_match_regex_case_sensitive}
     )
     regex_matched_domains_unique_names = set([domain.get('description') for domain in regex_matched_domains])
-    print('Unique domain names selected after searching with the case-sensitive regex string \'%s\':\n%s\n'
+    logger.info('Unique domain names selected after searching with the case-sensitive regex string \'%s\':\n%s\n'
         % (uniprot_domain_regex, regex_matched_domains_unique_names))
     
     
@@ -278,7 +282,7 @@ def extract_template_pdbchains_from_uniprot_xml(uniprotxml, uniprot_domain_regex
                         }
                         selected_pdbchains.append(data)
 
-    print('%d PDB chains selected.' % len(selected_pdbchains))
+    logger.info('%d PDB chains selected.' % len(selected_pdbchains))
     return selected_pdbchains
 
 
@@ -286,7 +290,7 @@ def get_structure_files(selected_pdbchains, structure_dirs=None):
     if structure_dirs:
         for structure_dir in structure_dirs:
             if not os.path.exists(structure_dir):
-                print('Warning: Structure directory {0} not found'.format(structure_dir))
+                logger.warn('Warning: Structure directory {0} not found'.format(structure_dir))
     for pdbchain in selected_pdbchains:
         get_structure_files_for_single_pdbchain(pdbchain['pdbid'], structure_dirs)
         
@@ -330,14 +334,14 @@ def download_structure_file(pdbid, project_structure_filepath, structure_type='p
 
 
 def download_pdb_file(pdbid, project_pdb_filepath):
-    print('Downloading PDB file for: %s' % pdbid)
+    logger.info('Downloading PDB file for: %s' % pdbid)
     pdbgz_page = pdb.retrieve_pdb(pdbid) 
     with gzip.open(project_pdb_filepath, 'w') as pdbgz_file:
         pdbgz_file.write(pdbgz_page)
 
 
 def download_sifts_file(pdbid, project_sifts_filepath):
-    print('Downloading sifts file for: %s' % pdbid)
+    logger.info('Downloading sifts file for: %s' % pdbid)
     sifts_page = pdb.retrieve_sifts(pdbid).encode("utf-8") 
     with gzip.open(project_sifts_filepath, 'wb') as project_sifts_file:
         project_sifts_file.write(sifts_page)
@@ -375,25 +379,27 @@ def add_pdb_modified_xml_tags_to_residues(siftsxml):
         
 def extract_template_pdb_chain_residues(selected_pdbchains):
     selected_templates = None
-    print('Extracting residues from PDB chains...')
-    selected_templates = []
-    for pdbchain in selected_pdbchains:
-        extracted_pdb_template_seq_data = extract_pdb_template_seq(pdbchain)
-        if extracted_pdb_template_seq_data is not None:
-            selected_templates.append(extracted_pdb_template_seq_data)
-    print('%d templates selected.\n' % len(selected_templates))
+    if mpistate.rank == 0: 
+        logger.info('Extracting residues from PDB chains...')
+        selected_templates = []
+        for pdbchain in selected_pdbchains:
+            extracted_pdb_template_seq_data = extract_pdb_template_seq(pdbchain)
+            if extracted_pdb_template_seq_data is not None:
+                selected_templates.append(extracted_pdb_template_seq_data)
+        logger.info('%d templates selected.\n' % len(selected_templates))
+    selected_templates = mpistate.comm.bcast(selected_templates, root=0)
     return selected_templates
 
-
+@utils.mpirank0only_and_end_with_barrier
 def write_template_seqs_to_fasta_file(selected_templates):
     templates_resolved_seqs = [SeqRecord(Seq(template.resolved_seq), id=template.templateid, description=template.templateid) for template in selected_templates]
     templates_full_seqs = [SeqRecord(Seq(template.full_seq), id=template.templateid, description=template.templateid) for template in selected_templates]
     Bio.SeqIO.write(templates_resolved_seqs, os.path.join('templates', 'templates-resolved-seq.fa'), 'fasta')
     Bio.SeqIO.write(templates_full_seqs, os.path.join('templates', 'templates-full-seq.fa'), 'fasta')
     
-    
+@utils.mpirank0only_and_end_with_barrier    
 def extract_template_structures_from_pdb_files(selected_templates):
-    print('Writing template structures...')
+    logger.info('Writing template structures...')
     for template in selected_templates:
         pdb_filename = os.path.join(core.default_project_dirnames.structures_pdb, template.pdbid + '.pdb.gz')
         template_resolved_filename = os.path.join(core.default_project_dirnames.templates_structures_resolved, template.templateid + '.pdb')
@@ -464,11 +470,3 @@ def extract_pdb_template_seq(pdbchain):
 
     return template_data
 
-
-def write_gather_templates_from_uniprot_metadata(uniprot_query_string, uniprot_domain_regex, ntemplates, structure_dirs):
-    gather_templates_from_uniprot_metadata = gen_uniprot_metadata(uniprot_query_string, uniprot_domain_regex)
-    gather_templates_from_uniprot_metadata['structure_dirs'] = structure_dirs
-    gather_templates_metadata = gen_gather_templates_metadata(ntemplates, additional_metadata=gather_templates_from_uniprot_metadata)
-    project_metadata = ensembler.core.ProjectMetadata(project_stage='gather_templates')
-    project_metadata.add_data(gather_templates_metadata)
-    project_metadata.write()

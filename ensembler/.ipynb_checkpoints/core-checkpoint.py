@@ -1,7 +1,21 @@
-import os 
+import os
+import logging
+import sys
+import re
+import warnings
+import numpy as np
+import Bio
+import Bio.SeqIO
 from collections import namedtuple
 
 manual_overrides_filename = 'manual-overrides.yaml'
+template_acceptable_ratio_resolved_residues = 0.7
+
+logger = logging.getLogger('info')
+default_loglevel = 'info'
+loglevel_obj = getattr(logging, default_loglevel.upper())
+logger.setLevel(loglevel_obj)
+logger.addHandler(logging.StreamHandler(stream=sys.stdout))
 
 project_dirtypes = [
     'targets',
@@ -26,6 +40,20 @@ default_project_dirnames = ProjectDirNames(
     templates_structures_modeled_loops=os.path.join('templates', 'structures-modeled-loops'),
 )
 
+
+# ========
+# MPI
+# ========
+
+
+class MPIState:
+    def __init__(self):
+        import mpi4py.MPI
+        self.comm = mpi4py.MPI.COMM_WORLD
+        self.rank = self.comm.rank
+        self.size = self.comm.size
+        
+mpistate = MPIState()
 
 def encode_url_query(uniprot_query):
     def replace_all(text, replace_dict):
@@ -176,3 +204,86 @@ class RefinementManualOverrides:
         else:
             self.ph = None
             self.custom_residue_variants_by_targetid = {}
+
+            
+def get_targets_and_templates():
+    targets = get_targets()
+    templates_resolved_seq = get_templates_resolved_seq()
+    return targets, templates_resolved_seq 
+
+
+def construct_fasta_str(id, seq):
+    target_fasta_string = '>%s\n%s\n' % (id, seqwrap(seq).strip())
+    return target_fasta_string
+
+
+def get_targets():
+    targets_fasta_filename = os.path.abspath(os.path.join(
+        default_project_dirnames.targets, 'targets.fa'
+    ))
+    targets = list(Bio.SeqIO.parse(targets_fasta_filename, 'fasta'))
+    return targets
+
+
+def get_templates_resolved_seq():
+    templates_resolved_seq_fasta_filename = os.path.abspath(os.path.join(
+        default_project_dirnames.templates, 'templates-resolved-seq.fa'
+    ))
+    templates_resolved_seq = list(Bio.SeqIO.parse(templates_resolved_seq_fasta_filename, 'fasta'))
+    return templates_resolved_seq
+
+
+def get_templates_full_seq():
+    templates_full_seq_fasta_filename = os.path.abspath(os.path.join(
+        default_project_dirnames.templates, 'templates-full-seq.fa'
+    ))
+    templates_full_seq = list(Bio.SeqIO.parse(templates_full_seq_fasta_filename, 'fasta'))
+    return templates_full_seq
+
+
+def find_loopmodel_executable():
+    for path in os.environ['PATH'].split(os.pathsep):
+        if not os.path.exists(path):
+            continue
+        path = path.strip('"')
+        for filename in os.listdir(path):
+            if len(filename) >= 10 and filename[0: 10] == 'loopmodel.':
+                if filename[-5:] == 'debug':
+                    warnings.warn(
+                        'loopmodel debug version ({0}) will be ignored, as it runs extremely slowly'.format(filename)
+                    )
+                    continue
+                return os.path.join(path, filename)
+    raise Exception('Loopmodel executable not found in PATH')
+
+    
+def find_partial_thread_executable():
+    for path in os.environ['PATH'].split(os.pathsep):
+        if not os.path.exists(path):
+            continue
+        path = path.strip('"')
+        for filename in os.listdir(path):
+            if len(filename) >= 10 and filename[0: 15] == 'partial_thread.':
+                if filename[-5:] == 'debug':
+                    warnings.warn(
+                        'partial_thread debug version ({0}) will be ignored, as it runs extremely slowly'.format(filename)
+                    )
+                    continue
+                return os.path.join(path, filename)
+    raise Exception('partial_thread executable not found in PATH')
+   
+
+def find_rosetta_scripts_executable():
+    for path in os.environ['PATH'].split(os.pathsep):
+        if not os.path.exists(path):
+            continue
+        path = path.strip('"')
+        for filename in os.listdir(path):
+            if len(filename) >= 10 and filename[0: 16] == 'rosetta_scripts.':
+                if filename[-5:] == 'debug':
+                    warnings.warn(
+                        'rosetta_scripts debug version ({0}) will be ignored, as it runs extremely slowly'.format(filename)
+                    )
+                    continue
+                return os.path.join(path, filename)
+    raise Exception('rosetta_scripts executable not found in PATH')
