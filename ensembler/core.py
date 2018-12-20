@@ -2,6 +2,7 @@ import os
 from collections import namedtuple
 
 manual_overrides_filename = 'manual-overrides.yaml'
+template_acceptable_ratio_resolved_residues = 0.7
 
 project_dirtypes = [
     'targets',

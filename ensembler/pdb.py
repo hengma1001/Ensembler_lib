@@ -2,7 +2,7 @@ import sys
 if sys.version_info > (3, 0):
     from urllib.request import urlopen
     from urllib.error import URLError
-    from io import StringIO
+    from io import StringIO, BytesIO
 else:
     from urllib2 import urlopen, URLError
     from StringIO import StringIO
@@ -74,14 +74,15 @@ def retrieve_sifts(pdb_id):
         print('ERROR downloading SIFTS file with PDB ID: %s' % pdb_id)
         raise
 
-    sifts_page = response.read(100000000) # Max 100MB
+    sifts_page = response.read(100000000)  # Max 100MB
     # Decompress string
-    sifts_page = gzip.GzipFile(fileobj=StringIO(sifts_page)).read()
+    sifts_page = gzip.GzipFile(fileobj=BytesIO(sifts_page)).read()
 
     # Removing all attribs from the entry tag, and the rdf tag and contents
     sifts_page_processed = ''
     skip_rdf_tag_flag = False
     for line in sifts_page.splitlines():
+        line = line.decode('utf-8')
         if line[0:6] == '<entry':
             sifts_page_processed += '<entry>' + '\n'
         elif line[0:7] == '  <rdf:':
@@ -97,16 +98,14 @@ def retrieve_sifts(pdb_id):
     return sifts_page_processed
 
 
-def retrieve_pdb(pdb_id,compressed='no'):
+def retrieve_pdb(pdb_id):
     """Retrieves a PDB file, given a PDB ID. Works by modifying the PDB download URL.
     """
-    pdb_download_base_url='http://www.rcsb.org/pdb/files/'
+    pdb_download_base_url='http://files.rcsb.org/view/'
     url = pdb_download_base_url + pdb_id + '.pdb'
-    if compressed == 'yes':
-        url += '.gz'
     response = urlopen(url)
-    pdb_file = response.read(10000000) # Max 10MB
-    return pdb_file
+    pdb_file = response.read() # Max 10MB
+    return pdb_file 
 
 
 def extract_uniprot_acs_from_sifts_xml(siftsxml):
