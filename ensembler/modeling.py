@@ -10,6 +10,9 @@ import traceback
 import tempfile
 
 import Bio
+import Bio.SeqIO
+import Bio.pairwise2
+import Bio.SubsMat.MatrixInfo
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
@@ -293,3 +296,131 @@ def run_loopmodel(input_template_pdb_filepath, loop_filepath, output_pdb_filepat
         shutil.rmtree(temp_dir)
         return LoopmodelOutput(output_text=output_text, exception=e, trbk=traceback.format_exc(), successful=False)
 
+
+
+@utils.notify_when_done
+def align_targets_and_templates(process_only_these_targets=None,
+                                process_only_these_templates=None,
+                                substitution_matrix='gonnet',
+                                gap_open=-10,
+                                gap_extend=-0.5,
+                                loglevel=None
+                                ):
+    """
+    Conducts pairwise alignments of target sequences against template sequences.
+    Stores Modeller-compatible 'alignment.pir' files in each model directory,
+    and also outputs a table of model IDs, sorted by sequence identity.
+
+    Parameters
+    ----------
+    process_only_these_targets:
+    process_only_these_templates:
+    substitution_matrix: str
+        Specify an amino acid substitution matrix available from Bio.SubsMat.MatrixInfo
+    """
+    utils.set_loglevel(loglevel)
+    targets, templates_resolved_seq = core.get_targets_and_templates()
+    ntemplates = len(templates_resolved_seq)
+    nselected_templates = len(process_only_these_templates) if process_only_these_templates else ntemplates
+    for target in targets:
+        if process_only_these_targets and target.id not in process_only_these_targets: continue
+
+        if mpistate.rank == 0:
+            logger.info('Working on target %s...' % target.id)
+
+        models_target_dir = os.path.join(core.default_project_dirnames.models, target.id)
+        utils.create_dir(models_target_dir)
+
+        seq_identity_data_sublist = []
+
+        for template_index in range(mpistate.rank, ntemplates, mpistate.size):
+            template_id = templates_resolved_seq[template_index].id
+            if os.path.exists(os.path.join(core.default_project_dirnames.templates_structures_modeled_loops, template_id + '.pdb')):
+                remodeled_seq_filepath = os.path.join(core.default_project_dirnames.templates_structures_modeled_loops, template_id + '-pdbfixed.fasta')
+                template = list(Bio.SeqIO.parse(remodeled_seq_filepath, 'fasta'))[0]
+            else:
+                template = templates_resolved_seq[template_index]
+
+            if process_only_these_templates and template_id not in process_only_these_templates: continue
+
+            model_dir = os.path.abspath(os.path.join(core.default_project_dirnames.models, target.id, template_id))
+            utils.create_dir(model_dir)
+            aln = align_target_template(
+                target,
+                template,
+                substitution_matrix=substitution_matrix,
+                gap_open=gap_open,
+                gap_extend=gap_extend
+            )
+#             aln_filepath = os.path.join(model_dir, 'alignment.pir')
+#             write_modeller_pir_aln_file(aln, target, template, pir_aln_filepath=aln_filepath)
+            aln_filepath = os.path.abspath(os.path.join(model_dir, 'alignment.ros'))
+            write_rosetta_grishin_aln_file(aln, target, template, pir_aln_filepath=aln_filepath)
+            seq_identity_data_sublist.append({
+                'templateid': template_id,
+                'seq_identity': calculate_seq_identity(aln),
+            })
+
+        seq_identity_data_gathered = mpistate.comm.gather(seq_identity_data_sublist, root=0)
+
+        seq_identity_data = []
+        if mpistate.rank == 0:
+            seq_identity_data = [None] * nselected_templates
+            for i in range(nselected_templates):
+                seq_identity_data[i] = seq_identity_data_gathered[i % mpistate.size][i // mpistate.size]
+
+        seq_identity_data = mpistate.comm.bcast(seq_identity_data, root=0)
+
+        seq_identity_data = sorted(seq_identity_data, key=lambda x: x['seq_identity'], reverse=True)
+        write_sorted_seq_identities(target, seq_identity_data)
+
+
+def align_target_template(target,
+                          template,
+                          substitution_matrix='gonnet',
+                          gap_open=-10,
+                          gap_extend=-0.5
+                          ):
+    """
+    Parameters
+    ----------
+    target: BioPython SeqRecord
+    template: BioPython SeqRecord
+    substitution_matrix: str
+        Specify an amino acid substitution matrix available from Bio.SubsMat.MatrixInfo
+    gap_open: float or int
+    gap_extend: float or int
+
+    Returns
+    -------
+    alignment: list
+    """
+    matrix = getattr(Bio.SubsMat.MatrixInfo, substitution_matrix)
+    aln = Bio.pairwise2.align.globalds(str(target.seq), str(template.seq), matrix, gap_open, gap_extend)
+    return aln
+
+
+def calculate_seq_identity(aln):
+    len_shorter_seq = min([len(aln[0][0].replace('-', '')), len(aln[0][1].replace('-', ''))])
+    seq_id = 0
+    for r in range(len(aln[0][0])):
+        if aln[0][0][r] == aln[0][1][r]:
+            seq_id += 1
+    seq_id = 100 * float(seq_id) / float(len_shorter_seq)
+    return seq_id
+
+
+def write_sorted_seq_identities(target, seq_identity_data):
+    seq_identity_file_str = ''
+    for seq_identity_dict in seq_identity_data:
+        seq_identity_file_str += '%-30s %.1f\n' % (seq_identity_dict['templateid'], seq_identity_dict['seq_identity'])
+    seq_identity_filepath = os.path.join(core.default_project_dirnames.models, target.id, 'sequence-identities.txt')
+    with open(seq_identity_filepath, 'w') as seq_identity_file:
+        seq_identity_file.write(seq_identity_file_str)
+
+
+def write_rosetta_grishin_aln_file(aln, target, template, pir_aln_filepath='alignment.ros'):
+    contents = "## {0} {1} \n# \nscores_from_program: 0 \n".format(target.id, template.id)
+    contents += '0 ' + aln[0][0] + '\n' + '0 ' + aln[0][1] + '\n--\n' 
+    with open(pir_aln_filepath, 'w') as outfile:
+        outfile.write(contents)
