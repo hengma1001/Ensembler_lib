@@ -29,11 +29,13 @@ ensembler.build_env.gather_templates_from_uniprot(search_string, loglevel=loglev
 
 mpistate.comm.Barrier()
 # # Loop model
-ensembler.modeling.model_template_loops(loglevel=loglevel)
+# Skipping loopmodel for testing purpose 
+# ensembler.modeling.model_template_loops(loglevel=loglevel)
 
 
 # # alignment 
 ensembler.modeling.align_targets_and_templates(loglevel=loglevel)
 
 # # Modeling
+mpistate.comm.Barrier()
 ensembler.modeling.build_models(loglevel=loglevel) 
