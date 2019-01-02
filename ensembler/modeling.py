@@ -599,7 +599,7 @@ def run_rosettaCM(target, template, model_dir, model_pdbfilepath, model_pdbfilep
     write_resettaCM_xml(xml_fn, thread_fullnames)
     rosetta_script_excutable = core.find_rosetta_scripts_executable()
 # -nstruct controls how many output structures 
-    command="%s @%s -database %s -nstruct 1"%(rosetta_script_excutable, flag_fn, minirosetta_database_path)
+    command="%s @%s -database %s -nstruct 10"%(rosetta_script_excutable, flag_fn, minirosetta_database_path)
     rosetta_output.write(command + '\n')
     rosetta_script = subprocess.Popen(command, stdout=rosetta_output, stderr=subprocess.STDOUT, shell=True)
 #    for line in iter(rosetta_script.stdout.readline, b''): 
