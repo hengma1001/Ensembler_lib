@@ -8,6 +8,7 @@ import glob
 import warnings
 import traceback 
 import tempfile
+from collections import namedtuple
 
 import Bio
 import Bio.SeqIO
@@ -22,6 +23,11 @@ from .core import mpistate, logger
 import subprocess
 loopmodel_subprocess_kwargs = {'timeout': 10800}   # 3 hour timeout - used for loopmodel call
     
+TargetSetupData = namedtuple(
+    'TargetSetupData',
+    ['target_starttime', 'models_target_dir']
+)
+
 class LoopmodelOutput:
     def __init__(self, output_text=None, loopmodel_exception=None, exception=None, trbk=None, successful=False, no_missing_residues=False):
         self.output_text = output_text
@@ -424,3 +430,239 @@ def write_rosetta_grishin_aln_file(aln, target, template, pir_aln_filepath='alig
     contents += '0 ' + aln[0][0] + '\n' + '0 ' + aln[0][1] + '\n--\n' 
     with open(pir_aln_filepath, 'w') as outfile:
         outfile.write(contents)
+
+
+@utils.notify_when_done
+def build_models(process_only_these_targets=None, process_only_these_templates=None,
+                 model_seqid_cutoff=None, write_modeller_restraints_file=False, loglevel=None):
+    """Uses the build_model method to build homology models for a given set of
+    targets and templates.
+
+    MPI-enabled.
+    """
+    # Note that this code uses an os.chdir call to switch into a temp directory before running Modeller.
+    # This is because Modeller writes various output files in the current directory, and there is NO WAY
+    # to define where these files are written, other than to chdir beforehand. If running this routine
+    # in parallel, it is likely that occasional exceptions will occur, due to concurrent processes
+    # making os.chdir calls.
+    utils.set_loglevel(loglevel)
+    targets, templates_resolved_seq = core.get_targets_and_templates()
+
+    if process_only_these_templates:
+        selected_template_indices = [i for i, seq in enumerate(templates_resolved_seq) if seq.id in process_only_these_templates]
+    else:
+        selected_template_indices = range(len(templates_resolved_seq))
+
+    for target in targets:
+        if process_only_these_targets and target.id not in process_only_these_targets: continue
+        target_setup_data = build_models_target_setup(target)
+
+        if model_seqid_cutoff:
+            process_only_these_templates = core.select_templates_by_seqid_cutoff(target.id, seqid_cutoff=model_seqid_cutoff)
+            selected_template_indices = [i for i, seq in enumerate(templates_resolved_seq) if seq.id in process_only_these_templates]
+
+        ntemplates_selected = len(selected_template_indices)
+
+        for template_index in range(mpistate.rank, ntemplates_selected, mpistate.size):
+            template_resolved_seq = templates_resolved_seq[selected_template_indices[template_index]]
+            if process_only_these_templates and template_resolved_seq.id not in process_only_these_templates: continue
+            build_model(target, template_resolved_seq, target_setup_data,
+                        write_modeller_restraints_file=write_modeller_restraints_file,
+                        loglevel=loglevel)
+
+def build_model(target, template_resolved_seq, target_setup_data,
+                write_modeller_restraints_file=False, number_output=10, 
+		loglevel=None):
+    """Uses Rosetta to build a homology model for a given target and
+    template.
+
+    Will not run Rosetta if the output files already exist.
+
+    Parameters
+    ----------
+    target : BioPython SeqRecord
+    template_resolved_seq : BioPython SeqRecord
+        Must be a corresponding .pdb template file with the same ID in the
+        templates/structures directory.
+    template_resolved_seq : BioPython SeqRecord
+        Must be a corresponding .pdb template file with the same ID in the
+        templates/structures directory.
+    target_setup_data : TargetSetupData obj
+    write_modeller_restraints_file : bool
+        Write file containing restraints used by Modeller - note that this file can be relatively
+        large, e.g. ~300KB per model for a protein kinase domain target.
+    loglevel : bool
+    """
+    utils.set_loglevel(loglevel)
+
+    template_structure_dir = os.path.abspath(
+        core.default_project_dirnames.templates_structures_modeled_loops
+    )
+
+    if os.path.exists(os.path.join(template_structure_dir, template_resolved_seq.id + '.pdb')):
+        remodeled_seq_filepath = os.path.join(
+            core.default_project_dirnames.templates_structures_modeled_loops,
+            template_resolved_seq.id + '-pdbfixed.fasta'
+        )
+        template = list(Bio.SeqIO.parse(remodeled_seq_filepath, 'fasta'))[0]
+    else:
+        template = template_resolved_seq
+        template_structure_dir = os.path.abspath(
+            core.default_project_dirnames.templates_structures_resolved
+        )
+
+    model_dir = os.path.abspath(os.path.join(target_setup_data.models_target_dir, template.id))
+    if not os.path.exists(model_dir):
+        utils.create_dir(model_dir)
+    model_pdbfilepath = os.path.abspath(os.path.join(model_dir, 'model.pdb.gz'))
+    modeling_log_filepath = os.path.abspath(os.path.join(model_dir, 'modeling-log.yaml'))
+
+    check_model_pdbfilepath_ends_in_pdbgz(model_pdbfilepath)
+    model_pdbfilepath_uncompressed = model_pdbfilepath[:-3]
+
+    if check_all_model_files_present(model_dir):
+        logger.debug(
+            "Output files already exist for target '%s' // template '%s'; files were not overwritten." %
+            (target.id, template.id)
+        )
+        return
+
+    logger.info(
+        '-------------------------------------------------------------------------\n'
+        'Modelling "%s" => "%s"\n'
+        '-------------------------------------------------------------------------'
+        % (target.id, template.id)
+    )
+
+    aln_filepath = os.path.abspath(os.path.join(model_dir, 'alignment.ros'))
+    run_rosettaCM(target, template, model_dir, model_pdbfilepath, model_pdbfilepath_uncompressed,
+                             template_structure_dir, n_ouputmodels = 1)
+    start = datetime.datetime.utcnow()
+
+
+def build_models_target_setup(target):
+    target_setup_data = None
+    if mpistate.rank == 0:
+        models_target_dir = os.path.join(core.default_project_dirnames.models, target.id)
+        target_starttime = datetime.datetime.utcnow()
+        logger.info(
+            '=========================================================================\n'
+            'Working on target "%s"\n'
+            '========================================================================='
+            % target.id
+        )
+        target_setup_data = TargetSetupData(
+            target_starttime=target_starttime,
+            models_target_dir=models_target_dir
+        )
+    target_setup_data = mpistate.comm.bcast(target_setup_data, root=0)
+    return target_setup_data
+
+def check_model_pdbfilepath_ends_in_pdbgz(model_pdbfilepath):
+    if model_pdbfilepath[-7:] != '.pdb.gz':
+        raise Exception('model_pdbfilepath (%s) must end in .pdb.gz' % model_pdbfilepath)
+
+
+def check_all_model_files_present(model_dir):
+    seqid_filepath = os.path.abspath(os.path.join(model_dir, 'sequence-identity.txt'))
+    model_pdbfilepath = os.path.abspath(os.path.join(model_dir, 'model.pdb.gz'))
+    aln_filepath = os.path.abspath(os.path.join(model_dir, 'alignment.pir'))
+    files_to_check = [model_pdbfilepath, seqid_filepath, aln_filepath]
+    files_present = [os.path.exists(filename) for filename in files_to_check]
+    return all(files_present)
+
+def run_rosettaCM(target, template, model_dir, model_pdbfilepath, model_pdbfilepath_uncompressed,
+                 template_structure_dir, n_ouputmodels = 1):
+    rosetta_output = open(os.path.abspath(os.path.join(model_dir, 'rosetta_cm.out')), 'w')
+    partial_thread_excutable = core.find_partial_thread_executable()
+    target_fasta_filepath = os.path.abspath(os.path.join(core.default_project_dirnames.targets, 'targets.fa'))
+    aln_filepath = os.path.abspath(os.path.join(model_dir, 'alignment.ros'))
+    minirosetta_database_path = os.environ.get('MINIROSETTA_DATABASE')
+    template_filepath = os.path.abspath(os.path.join(template_structure_dir, template.id+'.pdb'))
+    cwd = os.getcwd()
+    os.chdir(model_dir)
+    command = "%s -database %s -mute all -in:file:fasta %s -in:file:alignment %s -in:file:template_pdb %s -ignore_unrecognized_res"%(partial_thread_excutable, minirosetta_database_path, target_fasta_filepath, aln_filepath, template_filepath)
+    rosetta_output.write(command + '\n')
+    partial_threading = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+    partial_threading.wait()
+    thread_filepath = os.path.abspath(os.path.join(model_dir, template.id+'.pdb'))
+    if os.path.exists(thread_filepath):
+        thread_fullnames = [ thread_filepath ]
+    else:
+        logger.error('Recheck the partial threading process in Rosetta.')
+    rosetta_output.write('done partial threading.\n')
+    thread_fullnames = [ thread_filepath ]
+    flag_fn = os.path.abspath(os.path.join(model_dir, 'flags'))
+    xml_fn = os.path.abspath(os.path.join(model_dir, 'rosetta_cm.xml'))
+    silent_out = os.path.abspath(os.path.join(model_dir, 'rosetta_cm.silent'))
+    write_rosettaCM_flags(flag_fn, target_fasta_filepath, xml_fn, silent_out)
+    write_resettaCM_xml(xml_fn, thread_fullnames)
+    rosetta_script_excutable = core.find_rosetta_scripts_executable()
+# -nstruct controls how many output structures 
+    command="%s @%s -database %s -nstruct 1"%(rosetta_script_excutable, flag_fn, minirosetta_database_path)
+    rosetta_output.write(command + '\n')
+    rosetta_script = subprocess.Popen(command, stdout=rosetta_output, stderr=subprocess.STDOUT, shell=True)
+#    for line in iter(rosetta_script.stdout.readline, b''): 
+#        print(">>> " + line.rstrip())
+    rosetta_script.wait()
+    rosetta_output.write('\ndone rosetta scripts--hybridize mover.\n')
+    rosetta_model_output = os.path.join(model_dir, 'S_0001.pdb')
+    if os.path.exists(rosetta_model_output):
+        model_pdbfilepath_uncompressed = os.path.join(model_dir, 'model.pdb')
+        traj = mdtraj.load(rosetta_model_output)
+        selection_noH = traj.topology.select('not element H')
+        traj_noH = traj.atom_slice(selection_noH)
+        traj_noH.save_pdb(model_pdbfilepath_uncompressed)
+        model_pdbfilepath_compressed = os.path.join(model_dir, 'model.pdb.gz')
+        with open(model_pdbfilepath_uncompressed) as model_pdbfile:
+            with gzip.open(model_pdbfilepath, 'w') as model_pdbfilegz:
+                model_pdbfilegz.write(model_pdbfile.read())
+    else:
+        warnings.warn('Job failed to generate pdb for %s template, check your log file. '% template.id)
+    os.chdir(cwd)
+
+
+def write_rosettaCM_flags(flag_fn, fasta_fn, xml_fn, silent_fn):
+    flag_file=open(flag_fn,'w')
+    flag_file.write("# i/o\n")
+    flag_file.write("-in:file:fasta %s\n"%fasta_fn)
+    flag_file.write("-nstruct 20\n")
+    flag_file.write("-parser:protocol %s\n\n"%xml_fn)
+    flag_file.write("# relax options\n")
+    flag_file.write("-relax:dualspace\n")
+    flag_file.write("-relax:jump_move true\n")
+    flag_file.write("-default_max_cycles 200\n")
+    flag_file.write("-beta_cart\n")
+    flag_file.write("-hybridize:stage1_probability 1.0\n")
+
+def write_resettaCM_xml(fn, template_filenames):
+    xml_file=open(fn,'w')
+    xml_file.write("<ROSETTASCRIPTS>\n")
+    xml_file.write("    <TASKOPERATIONS>\n")
+    xml_file.write("    </TASKOPERATIONS>\n")
+    xml_file.write("    <SCOREFXNS>\n")
+    xml_file.write("        <ScoreFunction name=\"stage1\" weights=\"score3\" symmetric=\"0\">\n")
+    xml_file.write("            <Reweight scoretype=\"atom_pair_constraint\" weight=\"0.1\"/>\n")
+    xml_file.write("        </ScoreFunction>\n")
+    xml_file.write("        <ScoreFunction name=\"stage2\" weights=\"score4_smooth_cart\" symmetric=\"0\">\n")
+    xml_file.write("            <Reweight scoretype=\"atom_pair_constraint\" weight=\"0.1\"/>\n")
+    xml_file.write("        </ScoreFunction>\n")
+    xml_file.write("        <ScoreFunction name=\"fullatom\" weights=\"beta_cart\" symmetric=\"0\">\n")
+    xml_file.write("            <Reweight scoretype=\"atom_pair_constraint\" weight=\"0.1\"/>\n")
+    xml_file.write("        </ScoreFunction>\n")
+    xml_file.write("    </SCOREFXNS>\n")
+    xml_file.write("    <FILTERS>\n")
+    xml_file.write("    </FILTERS>\n")
+    xml_file.write("    <MOVERS>\n")
+    xml_file.write("        <Hybridize name=\"hybridize\" stage1_scorefxn=\"stage1\" stage2_scorefxn=\"stage2\" fa_scorefxn=\"fullatom\" batch=\"1\" stage1_increase_cycles=\"1.0\" stage2_increase_cycles=\"1.0\">\n")
+    for tmpl in template_filenames:
+        xml_file.write("            <Template pdb=\"%s\" cst_file=\"AUTO\" weight=\"1.0\" />\n"%(tmpl))
+    xml_file.write("        </Hybridize>\n")
+    xml_file.write("    </MOVERS>\n")
+    xml_file.write("    <APPLY_TO_POSE>\n")
+    xml_file.write("    </APPLY_TO_POSE>\n")
+    xml_file.write("    <PROTOCOLS>\n")
+    xml_file.write("        <Add mover=\"hybridize\"/>\n")
+    xml_file.write("    </PROTOCOLS>\n")
+    xml_file.write("</ROSETTASCRIPTS>\n")
+    xml_file.close()

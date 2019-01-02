@@ -9,7 +9,7 @@ from ensembler.modeling import model_template_loops, align_targets_and_templates
 from ensembler.core import default_project_dirnames, mpistate 
 
 search_string = 'accession:p42336 taxonomy:"Homo sapiens (Human) [9606]"'
-loglevel = loglevel
+loglevel = 'debug'
 
 # # Initializaion of the project
 ensembler.build_env.Ensembler_proj_init()

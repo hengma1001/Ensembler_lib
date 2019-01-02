@@ -34,3 +34,6 @@ ensembler.modeling.model_template_loops(loglevel=loglevel)
 
 # # alignment 
 ensembler.modeling.align_targets_and_templates(loglevel=loglevel)
+
+# # Modeling
+ensembler.modeling.build_models(loglevel=loglevel) 
