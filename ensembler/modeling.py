@@ -533,7 +533,7 @@ def build_model(target, template_resolved_seq, target_setup_data,
     logger.info(
         '-------------------------------------------------------------------------\n'
         'Modelling "%s" => "%s"\n' 
-        '   Generating %d models\n'
+        '   Generating %d model(s)\n'
         '-------------------------------------------------------------------------'
         % (target.id, template.id, number_of_models) 
     )
@@ -620,7 +620,7 @@ def run_rosettaCM(target, template, model_dir, model_pdbfilepath, model_pdbfilep
         model_pdbfilepath_compressed = os.path.join(model_dir, 'model.pdb.gz')
         with open(model_pdbfilepath_uncompressed) as model_pdbfile:
             with gzip.open(model_pdbfilepath, 'w') as model_pdbfilegz:
-                model_pdbfilegz.write(model_pdbfile.read())
+                model_pdbfilegz.write(model_pdbfile.read().encode())
     else:
         warnings.warn('Job failed to generate pdb for %s template, check your log file. '% template.id)
     os.chdir(cwd)
