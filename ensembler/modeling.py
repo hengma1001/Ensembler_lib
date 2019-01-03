@@ -9,6 +9,7 @@ import warnings
 import traceback 
 import tempfile
 from collections import namedtuple
+import mdtraj
 
 import Bio
 import Bio.SeqIO
@@ -434,7 +435,8 @@ def write_rosetta_grishin_aln_file(aln, target, template, pir_aln_filepath='alig
 
 @utils.notify_when_done
 def build_models(process_only_these_targets=None, process_only_these_templates=None,
-                 model_seqid_cutoff=None, write_modeller_restraints_file=False, loglevel=None):
+                 model_seqid_cutoff=None, write_modeller_restraints_file=False, 
+                 number_of_models=1, loglevel=None):
     """Uses the build_model method to build homology models for a given set of
     targets and templates.
 
@@ -467,11 +469,12 @@ def build_models(process_only_these_targets=None, process_only_these_templates=N
             template_resolved_seq = templates_resolved_seq[selected_template_indices[template_index]]
             if process_only_these_templates and template_resolved_seq.id not in process_only_these_templates: continue
             build_model(target, template_resolved_seq, target_setup_data,
-                        write_modeller_restraints_file=write_modeller_restraints_file,
+                        write_modeller_restraints_file=write_modeller_restraints_file, 
+                        number_of_models=number_of_models, 
                         loglevel=loglevel)
 
 def build_model(target, template_resolved_seq, target_setup_data,
-                write_modeller_restraints_file=False, number_output=10, 
+                write_modeller_restraints_file=False, number_of_models=1, 
 		loglevel=None):
     """Uses Rosetta to build a homology model for a given target and
     template.
@@ -529,14 +532,15 @@ def build_model(target, template_resolved_seq, target_setup_data,
 
     logger.info(
         '-------------------------------------------------------------------------\n'
-        'Modelling "%s" => "%s"\n'
+        'Modelling "%s" => "%s"\n' 
+        '   Generating %d models\n'
         '-------------------------------------------------------------------------'
-        % (target.id, template.id)
+        % (target.id, template.id, number_of_models) 
     )
 
     aln_filepath = os.path.abspath(os.path.join(model_dir, 'alignment.ros'))
     run_rosettaCM(target, template, model_dir, model_pdbfilepath, model_pdbfilepath_uncompressed,
-                             template_structure_dir, n_ouputmodels = 1)
+                             template_structure_dir, number_of_models = number_of_models)
     start = datetime.datetime.utcnow()
 
 
@@ -572,7 +576,7 @@ def check_all_model_files_present(model_dir):
     return all(files_present)
 
 def run_rosettaCM(target, template, model_dir, model_pdbfilepath, model_pdbfilepath_uncompressed,
-                 template_structure_dir, n_ouputmodels = 1):
+                 template_structure_dir, number_of_models = 1):
     rosetta_output = open(os.path.abspath(os.path.join(model_dir, 'rosetta_cm.out')), 'w')
     partial_thread_excutable = core.find_partial_thread_executable()
     target_fasta_filepath = os.path.abspath(os.path.join(core.default_project_dirnames.targets, 'targets.fa'))
@@ -599,7 +603,7 @@ def run_rosettaCM(target, template, model_dir, model_pdbfilepath, model_pdbfilep
     write_resettaCM_xml(xml_fn, thread_fullnames)
     rosetta_script_excutable = core.find_rosetta_scripts_executable()
 # -nstruct controls how many output structures 
-    command="%s @%s -database %s -nstruct 10"%(rosetta_script_excutable, flag_fn, minirosetta_database_path)
+    command="%s @%s -database %s -nstruct %d"%(rosetta_script_excutable, flag_fn, minirosetta_database_path, number_of_models)
     rosetta_output.write(command + '\n')
     rosetta_script = subprocess.Popen(command, stdout=rosetta_output, stderr=subprocess.STDOUT, shell=True)
 #    for line in iter(rosetta_script.stdout.readline, b''): 
