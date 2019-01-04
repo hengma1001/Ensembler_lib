@@ -610,19 +610,20 @@ def run_rosettaCM(target, template, model_dir, model_pdbfilepath, model_pdbfilep
 #        print(">>> " + line.rstrip())
     rosetta_script.wait()
     rosetta_output.write('\ndone rosetta scripts--hybridize mover.\n')
-    rosetta_model_output = os.path.join(model_dir, 'S_0001.pdb')
-    if os.path.exists(rosetta_model_output):
-        model_pdbfilepath_uncompressed = os.path.join(model_dir, 'model.pdb')
-        traj = mdtraj.load(rosetta_model_output)
-        selection_noH = traj.topology.select('not element H')
-        traj_noH = traj.atom_slice(selection_noH)
-        traj_noH.save_pdb(model_pdbfilepath_uncompressed)
-        model_pdbfilepath_compressed = os.path.join(model_dir, 'model.pdb.gz')
-        with open(model_pdbfilepath_uncompressed) as model_pdbfile:
-            with gzip.open(model_pdbfilepath, 'w') as model_pdbfilegz:
-                model_pdbfilegz.write(model_pdbfile.read().encode())
+    rosetta_models_output = glob.glob(os.path.join(model_dir, 'S_*.pdb'))     
+    if rosetta_models_output:
+        for rosetta_model in rosetta_models_output: 
+            model_pdbfilepath_uncompressed = os.path.join(model_dir, 'model' + rosetta_model[-9:])
+            traj = mdtraj.load(rosetta_model)
+            selection_noH = traj.topology.select('not element H')
+            traj_noH = traj.atom_slice(selection_noH)
+            traj_noH.save_pdb(model_pdbfilepath_uncompressed)
+            model_pdbfilepath_compressed = os.path.join(model_dir, 'model' + rosetta_model[-9:] + '.gz')
+            with open(model_pdbfilepath_uncompressed) as model_pdbfile:
+                with gzip.open(model_pdbfilepath_compressed, 'w') as model_pdbfilegz:
+                    model_pdbfilegz.write(model_pdbfile.read().encode())
     else:
-        warnings.warn('Job failed to generate pdb for %s template, check your log file. '% template.id)
+        logger.error('Job failed to generate pdb for %s template, check your log file. '% template.id)
     os.chdir(cwd)
 
 
