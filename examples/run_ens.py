@@ -38,4 +38,4 @@ ensembler.modeling.align_targets_and_templates(loglevel=loglevel)
 
 # # Modeling
 mpistate.comm.Barrier()
-ensembler.modeling.build_models(loglevel=loglevel) 
+ensembler.modeling.build_models(loglevel=loglevel, number_of_models=10) 
