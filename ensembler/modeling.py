@@ -599,7 +599,7 @@ def run_rosettaCM(target, template, model_dir, model_pdbfilepath, model_pdbfilep
     flag_fn = os.path.abspath(os.path.join(model_dir, 'flags'))
     xml_fn = os.path.abspath(os.path.join(model_dir, 'rosetta_cm.xml'))
     silent_out = os.path.abspath(os.path.join(model_dir, 'rosetta_cm.silent'))
-    write_rosettaCM_flags(flag_fn, target_fasta_filepath, xml_fn, silent_out)
+    write_rosettaCM_flags(flag_fn, target_fasta_filepath, xml_fn, silent_out, number_of_models)
     write_resettaCM_xml(xml_fn, thread_fullnames)
     rosetta_script_excutable = core.find_rosetta_scripts_executable()
 # -nstruct controls how many output structures 
@@ -627,11 +627,11 @@ def run_rosettaCM(target, template, model_dir, model_pdbfilepath, model_pdbfilep
     os.chdir(cwd)
 
 
-def write_rosettaCM_flags(flag_fn, fasta_fn, xml_fn, silent_fn):
+def write_rosettaCM_flags(flag_fn, fasta_fn, xml_fn, silent_fn, number_of_models):
     flag_file=open(flag_fn,'w')
     flag_file.write("# i/o\n")
     flag_file.write("-in:file:fasta %s\n"%fasta_fn)
-    flag_file.write("-nstruct 20\n")
+    flag_file.write("-nstruct %d\n" % number_of_models)
     flag_file.write("-parser:protocol %s\n\n"%xml_fn)
     flag_file.write("# relax options\n")
     flag_file.write("-relax:dualspace\n")

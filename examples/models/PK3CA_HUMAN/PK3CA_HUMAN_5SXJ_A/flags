@@ -1,0 +1,11 @@
+# i/o
+-in:file:fasta /home/hm0/Research/ensembler/Ensembler_lib/examples/targets/targets.fa
+-nstruct 20
+-parser:protocol /home/hm0/Research/ensembler/Ensembler_lib/examples/models/PK3CA_HUMAN/PK3CA_HUMAN_5SXJ_A/rosetta_cm.xml
+
+# relax options
+-relax:dualspace
+-relax:jump_move true
+-default_max_cycles 200
+-beta_cart
+-hybridize:stage1_probability 1.0
