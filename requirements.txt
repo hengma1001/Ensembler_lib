@@ -2,3 +2,7 @@ biopython
 lxml
 mpi4py
 pdbfixer
+cython
+numpy
+mdtraj
+msmbuilder
