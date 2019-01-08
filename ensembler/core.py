@@ -287,3 +287,27 @@ def find_rosetta_scripts_executable():
                     continue
                 return os.path.join(path, filename)
     raise Exception('rosetta_scripts executable not found in PATH')
+
+
+def select_templates_by_seqid_cutoff(targetid, seqid_cutoff=None):
+    """
+    Parameters
+    ----------
+    targetid: str
+    seqid_cutoff: float
+
+    Returns
+    -------
+    selected_templateids: list of str
+    """
+    seqid_filepath = os.path.join(default_project_dirnames.models, targetid, 'sequence-identities.txt')
+    with open(seqid_filepath) as seqid_file:
+        seqid_lines_split = [line.split() for line in seqid_file.read().splitlines()]
+
+    templateids = np.array([i[0] for i in seqid_lines_split])
+    seqids = np.array([float(i[1]) for i in seqid_lines_split])
+
+    # must coerce to str due to yaml.dump type requirements
+    selected_templateids = [str(x) for x in templateids[seqids > seqid_cutoff]]
+
+    return selected_templateids

@@ -10,6 +10,7 @@ import traceback
 import tempfile
 from collections import namedtuple
 import mdtraj
+import numpy as np
 
 import Bio
 import Bio.SeqIO
@@ -366,6 +367,7 @@ def align_targets_and_templates(process_only_these_targets=None,
             seq_identity_data_sublist.append({
                 'templateid': template_id,
                 'seq_identity': calculate_seq_identity(aln),
+                'seq_ratio': calculate_match_ratio(aln), 
             })
 
         seq_identity_data_gathered = mpistate.comm.gather(seq_identity_data_sublist, root=0)
@@ -380,6 +382,9 @@ def align_targets_and_templates(process_only_these_targets=None,
 
         seq_identity_data = sorted(seq_identity_data, key=lambda x: x['seq_identity'], reverse=True)
         write_sorted_seq_identities(target, seq_identity_data)
+
+        seq_ratio_data = sorted(seq_identity_data, key=lambda x: x['seq_ratio'], reverse=True) 
+        write_sorted_seq_ratios(target, seq_ratio_data)
 
 
 def align_target_template(target,
@@ -426,6 +431,19 @@ def write_sorted_seq_identities(target, seq_identity_data):
         seq_identity_file.write(seq_identity_file_str)
 
 
+def write_sorted_seq_ratios(target, seq_ratio_data): 
+    seq_ratio_file_str = ''
+    for seq_ratio_dict in seq_ratio_data:
+        seq_ratio_file_str += '%-30s %.3f\n' % (seq_ratio_dict['templateid'], seq_ratio_dict['seq_ratio'])
+    seq_ratio_filepath = os.path.join(core.default_project_dirnames.models, target.id, 'sequence-ratios.txt')
+    with open(seq_ratio_filepath, 'w') as seq_ratio_file:
+        seq_ratio_file.write(seq_ratio_file_str)
+
+def calculate_match_ratio(aln): 
+    len_target_seq = len(aln[0][0].replace('-', ''))
+    len_template_match_seq = len(aln[0][1].replace('-', ''))  
+    return len_template_match_seq/len_target_seq
+
 def write_rosetta_grishin_aln_file(aln, target, template, pir_aln_filepath='alignment.ros'):
     contents = "## {0} {1} \n# \nscores_from_program: 0 \n".format(target.id, template.id)
     contents += '0 ' + aln[0][0] + '\n' + '0 ' + aln[0][1] + '\n--\n' 
@@ -436,7 +454,7 @@ def write_rosetta_grishin_aln_file(aln, target, template, pir_aln_filepath='alig
 @utils.notify_when_done
 def build_models(process_only_these_targets=None, process_only_these_templates=None,
                  model_seqid_cutoff=None, write_modeller_restraints_file=False, 
-                 number_of_models=1, loglevel=None):
+                 number_of_models=1, sequence_matching_ratio=None, loglevel=None):
     """Uses the build_model method to build homology models for a given set of
     targets and templates.
 
@@ -457,21 +475,33 @@ def build_models(process_only_these_targets=None, process_only_these_templates=N
 
     for target in targets:
         if process_only_these_targets and target.id not in process_only_these_targets: continue
+
         target_setup_data = build_models_target_setup(target)
 
         if model_seqid_cutoff:
             process_only_these_templates = core.select_templates_by_seqid_cutoff(target.id, seqid_cutoff=model_seqid_cutoff)
             selected_template_indices = [i for i, seq in enumerate(templates_resolved_seq) if seq.id in process_only_these_templates]
 
+        if sequence_matching_ratio: 
+            seq_ratio_filepath = os.path.join(core.default_project_dirnames.models, target.id, 'sequence-ratios.txt') 
+            seq_ratios = open(seq_ratio_filepath).read().split()
+            seq_ratio_dict = dict(zip(seq_ratios[::2], [float(i) for i in seq_ratios[1::2]]))
+#         selected_template_indices = [i for i, seq in zip(selected_template_indices, [templates_resolved_seq[i] for i in selected_template_indices])\
+#                 if seq_ratio_dict[seq.id] > sequence_matching_ratio] 
+
         ntemplates_selected = len(selected_template_indices)
 
         for template_index in range(mpistate.rank, ntemplates_selected, mpistate.size):
             template_resolved_seq = templates_resolved_seq[selected_template_indices[template_index]]
             if process_only_these_templates and template_resolved_seq.id not in process_only_these_templates: continue
+            if sequence_matching_ratio and seq_ratio_dict[template_resolved_seq.id] < sequence_matching_ratio: 
+                logger.info("Skipping template %s for low sequence matching ratio, %f. " % (template_resolved_seq.id, seq_ratio_dict[template_resolved_seq.id])) 
+                continue
             build_model(target, template_resolved_seq, target_setup_data,
                         write_modeller_restraints_file=write_modeller_restraints_file, 
                         number_of_models=number_of_models, 
                         loglevel=loglevel)
+
 
 def build_model(target, template_resolved_seq, target_setup_data,
                 write_modeller_restraints_file=False, number_of_models=1, 
@@ -671,3 +701,135 @@ def write_resettaCM_xml(fn, template_filenames):
     xml_file.write("    </PROTOCOLS>\n")
     xml_file.write("</ROSETTASCRIPTS>\n")
     xml_file.close()
+
+
+@utils.mpirank0only_and_end_with_barrier
+@utils.notify_when_done
+def cluster_models(process_only_these_targets=None, cutoff=0.06, loglevel=None, sequence_matching_ratio=None):
+    """Cluster models based on RMSD, and filter out non-unique models as
+    determined by a given cutoff.
+
+    Parameters
+    ----------
+
+    cutoff : float
+        Minimum distance cutoff for RMSD clustering (nm)
+
+    Runs serially.
+    """
+    # TODO refactor
+    utils.set_loglevel(loglevel)
+    targets, templates_resolved_seq = core.get_targets_and_templates()
+    templates = templates_resolved_seq
+
+    for target in targets:
+        if process_only_these_targets and (target.id not in process_only_these_targets): continue
+        if sequence_matching_ratio:
+            seq_ratio_filepath = os.path.join(core.default_project_dirnames.models, target.id, 'sequence-ratios.txt')
+            seq_ratios = open(seq_ratio_filepath).read().split()
+            seq_ratio_dict = dict(zip(seq_ratios[::2], [float(i) for i in seq_ratios[1::2]]))
+            templates = [template for template in templates if seq_ratio_dict[template.id] > sequence_matching_ratio] 
+            logger.info("Skipping templates with sequence matching ratios lower than %f. " % (sequence_matching_ratio))
+
+        models_target_dir = os.path.join(core.default_project_dirnames.models, target.id)
+        if not os.path.exists(models_target_dir): continue
+
+        # =============================
+        # Construct a mdtraj trajectory containing all models
+        # =============================
+
+        starttime = datetime.datetime.utcnow()
+
+        logger.debug('Building a list of valid models...')
+
+#         model_pdbfilenames_compressed = {
+#             template.id: os.path.join(models_target_dir, template.id, 'model.pdb.gz') for template in templates
+#         }
+        model_pdbfilenames_uncompressed = {
+            template.id: glob.glob(os.path.join(models_target_dir, template.id, 'model*.pdb')) for template in templates 
+        }
+        valid_model_pdbs = [
+            template_pdb for template_pdb in np.hstack(model_pdbfilenames_uncompressed.values())
+            if os.path.exists(template_pdb)
+        ]
+
+        # Write uncompressed model.pdb files from model.pdb.gz if necessary
+#         for templateid in valid_templateids:
+#             if not os.path.exists(model_pdbfilenames_uncompressed[templateid]) or os.path.getsize(model_pdbfilenames_uncompressed[templateid]) == 0:
+#                 with gzip.open(model_pdbfilenames_compressed[templateid]) as model_pdbfile_compressed:
+#                     with open(model_pdbfilenames_uncompressed[templateid], 'w') as model_pdbfile:
+#                         model_pdbfile.write(model_pdbfile_compressed.read())
+
+        logger.info('Constructing a trajectory containing all valid models...')
+
+        if len(valid_model_pdbs) == 0:
+            logger.info('No models found for target {0}.'.format(target.id))
+            continue
+
+#         valid_model_pdbfilenames_uncompressed = [
+#             model_pdbfilenames_uncompressed[templateid] for templateid in valid_templateids
+#         ]
+
+        traj = mdtraj.load(valid_model_pdbs)
+
+        # =============================
+        # Clustering
+        # =============================
+
+        logger.info('Conducting RMSD-based clustering...')
+
+        # Remove any existing unique_by_clustering files
+        for f in glob.glob(models_target_dir+'/*_PK_*/unique_by_clustering'):
+            os.unlink(f)
+
+        CAatoms = [a.index for a in traj.topology.atoms if a.name == 'CA']
+        unique_templateids = models_regular_spatial_clustering(
+            valid_model_pdbs, traj, atom_indices=CAatoms, cutoff=cutoff
+        )
+#         return unique_templateids 
+#         write_unique_by_clustering_files(unique_templateids, models_target_dir)
+
+        with open(os.path.join(models_target_dir, 'unique-models.txt'), 'w') as uniques_file:
+            for u in unique_templateids:
+                uniques_file.write(u+'\n')
+            logger.info(
+                '%d unique models (from original set of %d) using cutoff of %.3f nm' %
+                        (len(unique_templateids), len(valid_model_pdbs), cutoff)
+            )
+
+#         for template in templates:
+#             model_dir = os.path.join(models_target_dir, template.id)
+#             model_pdbfilename = os.path.join(model_dir, 'model.pdb')
+#             if os.path.exists(model_pdbfilename):
+#                 os.remove(model_pdbfilename)
+
+
+def models_regular_spatial_clustering(templateids, traj, atom_indices=None, cutoff=0.06):
+    """
+    Use MSMBuilder to perform RMSD-based regular spatial clustering on a set of models.
+
+    Parameters
+    ----------
+    templateids: list of str
+    traj: mdtraj.Trajectory
+    atom_indices: np.array
+    cutoff: float
+        Minimum distance cutoff for RMSD clustering (nm)
+    """
+    if atom_indices:
+        reduced_traj = traj.atom_slice(atom_indices)
+    else:
+        reduced_traj = traj
+
+    import msmbuilder.cluster
+    cluster = msmbuilder.cluster.RegularSpatial(cutoff, metric='rmsd')
+    cluster_labels = cluster.fit_predict([reduced_traj])[0]
+    unique_templateids = list(set([templateids[t] for t in cluster_labels]))
+    return unique_templateids
+
+
+def write_unique_by_clustering_files(unique_templateids, models_target_dir):
+    for templateid in unique_templateids:
+        unique_filename = os.path.join(models_target_dir, templateid, 'unique_by_clustering')
+        with open(unique_filename, 'w') as unique_file:
+            pass
