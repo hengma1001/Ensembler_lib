@@ -36,12 +36,14 @@ class Ensembler_proj_init(object):
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.targets))
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.templates))
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.structures))
-        utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.models))
+        utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.models)) 
+        utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.simulations))
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.packaged_models))
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.structures_pdb))
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.structures_sifts))
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.templates_structures_resolved))
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.templates_structures_modeled_loops))
+        
 
 
 class GatherTargetsFromUniprot(): 
@@ -132,7 +134,8 @@ def gather_templates_from_uniprot(uniprot_query_string, uniprot_domain_regex=Non
         get_structure_files(selected_pdbchains, structure_dirs)
 
     selected_pdbchains = mpistate.comm.bcast(selected_pdbchains, root=0)
-    logger.debug('Selected PDB chains: {0}'.format([pdbchain['templateid'] for pdbchain in selected_pdbchains]))
+    if mpistate.rank == 0: 
+        logger.debug('Selected PDB chains: {0}'.format([pdbchain['templateid'] for pdbchain in selected_pdbchains]))
 
     selected_templates = extract_template_pdb_chain_residues(selected_pdbchains)
     write_template_seqs_to_fasta_file(selected_templates)

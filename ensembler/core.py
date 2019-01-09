@@ -20,7 +20,8 @@ logger.addHandler(logging.StreamHandler(stream=sys.stdout))
 project_dirtypes = [
     'targets',
     'templates',
-    'structures', 'models',
+    'structures', 'models', 
+    'simulations', 
     'packaged_models',
     'structures_pdb',
     'structures_sifts',
@@ -33,6 +34,7 @@ default_project_dirnames = ProjectDirNames(
     templates='templates',
     structures='structures',
     models='models',
+    simulations='simulations', 
     packaged_models='packaged_models',
     structures_pdb=os.path.join('structures', 'pdb'),
     structures_sifts=os.path.join('structures', 'sifts'),

@@ -33,11 +33,12 @@ def log_done():
     
 def create_dir(dirname): 
     try:
-        os.mkdir(dirname)
+        os.mkdir(dirname) 
+        logger.debug('Created directory {}, continuing...'.format(dirname))
     except OSError as exc:
         if exc.errno != errno.EEXIST:
             raise
-        logger.info(f'File {dirname} exists, pass...') 
+        logger.debug('Directory {} exists, pass...'.format(dirname)) 
         
         
 def file_exists_and_not_empty(filepath):

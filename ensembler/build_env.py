@@ -36,12 +36,14 @@ class Ensembler_proj_init(object):
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.targets))
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.templates))
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.structures))
-        utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.models))
+        utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.models)) 
+        utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.simulations))
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.packaged_models))
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.structures_pdb))
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.structures_sifts))
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.templates_structures_resolved))
         utils.create_dir(os.path.join(self.project_toplevel_dir, core.default_project_dirnames.templates_structures_modeled_loops))
+        
 
 
 class GatherTargetsFromUniprot(): 
