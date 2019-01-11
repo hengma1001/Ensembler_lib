@@ -298,7 +298,7 @@ def refine_explicit_md(
                 
         mpistate.comm.Barrier()
         
-        simulations_target_model_dirs = glob.glob(os.path.join(simulations_target_dir, target.id + '*')) 
+        simulations_target_model_dirs = sorted(glob.glob(os.path.join(simulations_target_dir, target.id + '*'))) 
         n_model_pdb = len(simulations_target_model_dirs) 
         
         for model_index in range(mpistate.rank, n_model_pdb, mpistate.size): 
