@@ -200,7 +200,7 @@ def refine_explicit_md(
 #         barostat_period=50,
         minimization_tolerance=10.0 * unit.kilojoules_per_mole / unit.nanometer,
         minimization_steps=20,
-        nsteps_per_iteration=500,
+        nsteps_per_iteration=5000,
         write_solvated_model=False,
         cpu_platform_threads=1,
         retry_failed_runs=False,
@@ -271,7 +271,7 @@ def refine_explicit_md(
 
         if loglevel == "debug": 
             simulation.reporters.append(app.StateDataReporter(sys.stdout, 
-                nsteps_per_iteration*100, step=True, time=True, speed=True, 
+                nsteps_per_iteration*10, step=True, time=True, speed=True, 
                 potentialEnergy=True, temperature=True, totalEnergy=True)) 
         logger.debug("Running dynamics...")
         simulation.step(int((sim_length / timestep))) 
