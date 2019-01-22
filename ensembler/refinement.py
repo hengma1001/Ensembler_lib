@@ -141,7 +141,8 @@ def refine_implicit_md(
         
         for model_index in range(mpistate.rank, n_model_pdb, mpistate.size): 
             gpuid = model_index % gpupn 
-            simulation_model_dir = os.path.join(simulations_target_dir, model_pdbs[model_index][19:-4].replace('/', '_')) 
+            simulation_model_name = os.path.join(os.path.basename(os.path.dirname(model_pdbs[model_index])), os.path.basename(model_pdbs[model_index]))[:-4].replace('/', '_')
+            simulation_model_dir = os.path.join(simulations_target_dir, simulation_model_name) 
             utils.create_dir(simulation_model_dir) 
             model_file = os.path.join(simulation_model_dir, 'model.pdb') 
             if os.path.exists(model_pdbs[model_index]): 
@@ -154,7 +155,7 @@ def refine_implicit_md(
                 logger.info("%s already exists, continuing..." % pdb_filename) 
                 continue 
             logger.info("-------------------------------------------------------------------------")
-            logger.info("Simulating %s from %s in implicit solvent for %.1f ps (MPI rank: %d, GPU ID: %d)" % (target.id, model_pdbs[model_index][19:-4].replace('/', '_'), sim_length/unit.picoseconds, mpistate.rank, gpuid))
+            logger.info("Simulating %s from %s in implicit solvent for %.1f ps (MPI rank: %d, GPU ID: %d)" % (target.id, simulation_model_name, sim_length/unit.picoseconds, mpistate.rank, gpuid))
             logger.info("-------------------------------------------------------------------------") 
             
             simulate_implicit_md()
@@ -200,7 +201,7 @@ def refine_explicit_md(
 #         barostat_period=50,
         minimization_tolerance=10.0 * unit.kilojoules_per_mole / unit.nanometer,
         minimization_steps=20,
-        nsteps_per_iteration=5000,
+        nsteps_per_iteration=500,
         write_solvated_model=False,
         cpu_platform_threads=1,
         retry_failed_runs=False,
@@ -271,7 +272,7 @@ def refine_explicit_md(
 
         if loglevel == "debug": 
             simulation.reporters.append(app.StateDataReporter(sys.stdout, 
-                nsteps_per_iteration*10, step=True, time=True, speed=True, 
+                nsteps_per_iteration*100, step=True, time=True, speed=True, 
                 potentialEnergy=True, temperature=True, totalEnergy=True)) 
         logger.debug("Running dynamics...")
         simulation.step(int((sim_length / timestep))) 
